@@ -37,6 +37,7 @@ let attemptedUsers = new Set();
 function saveConfig() {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
 }
+
 function formatApiText(text) {
     if (!text || text === 'null' || text === 'undefined') return '';
 
@@ -61,6 +62,7 @@ function formatApiText(text) {
         .replace(/\s+/g, ' ')
         .trim();
 }
+
 function getLatexImageUrl(text) {
     if (!text || text === 'null') return null;
     const hasMath = /\$([^$]+)\$|\\frac|\\sqrt|\\begin\{align\}/;
@@ -176,37 +178,117 @@ function buildLeaderboardEmbed() {
         .setFooter({ text: `Who's the best? • ${getFormattedTimestampPST()}` });
 }
 
+function transformExternalQuestion(item) {
+    if (item.question && item.question.choices) {
+        return {
+            domain: item.domain || item.category || 'General SAT',
+            difficulty: item.difficulty || 'Medium',
+            explanation: item.explanation || item.reasoning || null,
+            question: {
+                paragraph: item.question.paragraph || item.paragraph || '',
+                question: item.question.question || item.question || '',
+                choices: item.question.choices,
+                correct_answer: item.question.correct_answer || item.correct_answer
+            }
+        };
+    }
+
+    if (item.options && (item.answer || item.correctAnswer)) {
+        const choices = Array.isArray(item.options) ? {
+            A: item.options[0] || '',
+            B: item.options[1] || '',
+            C: item.options[2] || '',
+            D: item.options[3] || ''
+        } : item.options;
+
+        let corrAns = item.answer || item.correctAnswer;
+        if (typeof corrAns === 'number') {
+            corrAns = ['A', 'B', 'C', 'D'][corrAns];
+        }
+
+        return {
+            domain: item.domain || item.subject || 'General SAT',
+            difficulty: item.difficulty || 'Medium',
+            explanation: item.explanation || item.rationale || null,
+            question: {
+                paragraph: item.passage || item.context || '',
+                question: item.prompt || item.question || '',
+                choices: choices,
+                correct_answer: corrAns
+            }
+        };
+    }
+
+    return null;
+}
+
 async function fetchQuestions() {
     try {
-        console.log('Fetching questions from API...');
+        console.log('Fetching questions from sources...');
         let allQuestions = [];
 
         const sectionsToFetch = config.allowedSections && config.allowedSections.length > 0 
             ? config.allowedSections 
             : ['MATH', 'ENGLISH'];
-        const requests = sectionsToFetch.map(section => 
+
+        const apiRequests = sectionsToFetch.map(section => 
             axios.get(`https://pinesat.duckdns.org/api/questions?section=${encodeURIComponent(section)}`)
+                .then(res => res.data)
                 .catch(err => {
                     console.error(`Failed to fetch section ${section}:`, err.message);
-                    return { data: [] };
+                    return [];
                 })
         );
-        const responses = await Promise.all(requests);
-        responses.forEach(res => {
-            if (Array.isArray(res.data)) {
-                allQuestions.push(...res.data);
+
+        const realQuestionsReq = axios.get('https://raw.githubusercontent.com/jwei98/ai-sat-question-generator/main/data/real_questions.json')
+            .then(res => res.data)
+            .catch(err => {
+                console.error('Failed to fetch real_questions.json:', err.message);
+                return [];
+            });
+
+        const mySatPrepReq = axios.get('https://raw.githubusercontent.com/Aldhanekaa/MySATPrep/main/questions.json')
+            .then(res => res.data)
+            .catch(err => {
+                console.error('Failed to fetch MySATPrep questions:', err.message);
+                return [];
+            });
+
+        const [apiResults, realQuestionsData, mySatPrepData] = await Promise.all([
+            Promise.all(apiRequests),
+            realQuestionsReq,
+            mySatPrepReq
+        ]);
+
+        apiResults.forEach(data => {
+            if (Array.isArray(data)) {
+                allQuestions.push(...data);
             }
         });
+
+        const externalSources = [
+            ...(Array.isArray(realQuestionsData) ? realQuestionsData : []),
+            ...(Array.isArray(mySatPrepData) ? mySatPrepData : [])
+        ];
+
+        externalSources.forEach(item => {
+            const transformed = transformExternalQuestion(item);
+            if (transformed) {
+                allQuestions.push(transformed);
+            }
+        });
+
         if (config.allowedDifficulties && config.allowedDifficulties.length > 0) {
             allQuestions = allQuestions.filter(q => config.allowedDifficulties.includes(q.difficulty));
         }
 
         questionsCache = allQuestions;
-        console.log(`Loaded ${questionsCache.length} total questions (Math & English) into cache.`);
+        console.log(`Loaded ${questionsCache.length} total questions into cache.`);
     } catch (err) {
-        console.error('Error fetching questions from API:', err.message);
+        console.error('Error fetching questions:', err.message);
     }
 }
+
 async function updateLeaderboardChannel() {
     try {
         const lbChannel = await client.channels.fetch(config.leaderboardChannelId);
@@ -231,6 +313,7 @@ async function postNextQuestion(qChannel) {
         await fetchQuestions();
         if (questionsCache.length === 0) return;
     }
+
     if (currentQuestionMsg) {
         try {
             const disabledRow = new ActionRowBuilder().addComponents(
