@@ -1,0 +1,17 @@
+{
+  "token": "nopenothere",
+  "channelId": "1506504743520964699",
+  "leaderboardChannelId": "1506511842644852758",
+  "allowedDifficulties": [
+    "Easy",
+    "Medium",
+    "Hard"
+  ],
+  "allowedSections": [
+    "MATH",
+    "ENGLISH"
+  ],
+  "scores": {
+    "819595488831340595": 6
+  }
+}
