@@ -178,43 +178,44 @@ function buildLeaderboardEmbed() {
         .setFooter({ text: `Who's the best? • ${getFormattedTimestampPST()}` });
 }
 
-function transformExternalQuestion(item) {
+function transformMySatPrepQuestion(item) {
+    if (!item) return null;
+
+    const diffMap = { 'E': 'Easy', 'M': 'Medium', 'H': 'Hard' };
+    const difficulty = diffMap[item.difficulty] || item.difficulty || 'Medium';
+
     if (item.question && item.question.choices) {
         return {
-            domain: item.domain || item.category || 'General SAT',
-            difficulty: item.difficulty || 'Medium',
-            explanation: item.explanation || item.reasoning || null,
+            domain: item.primary_class_cd_desc || item.skill_desc || 'General SAT',
+            difficulty: difficulty,
+            explanation: item.explanation || item.rationale || null,
             question: {
-                paragraph: item.question.paragraph || item.paragraph || '',
-                question: item.question.question || item.question || '',
+                paragraph: item.question.paragraph || item.stem || '',
+                question: item.question.question || item.prompt || '',
                 choices: item.question.choices,
                 correct_answer: item.question.correct_answer || item.correct_answer
             }
         };
     }
 
-    if (item.options && (item.answer || item.correctAnswer)) {
-        const choices = Array.isArray(item.options) ? {
-            A: item.options[0] || '',
-            B: item.options[1] || '',
-            C: item.options[2] || '',
-            D: item.options[3] || ''
-        } : item.options;
-
-        let corrAns = item.answer || item.correctAnswer;
-        if (typeof corrAns === 'number') {
-            corrAns = ['A', 'B', 'C', 'D'][corrAns];
-        }
+    if (item.choices || item.options) {
+        const rawChoices = item.choices || item.options;
+        const choices = Array.isArray(rawChoices) ? {
+            A: rawChoices[0] || '',
+            B: rawChoices[1] || '',
+            C: rawChoices[2] || '',
+            D: rawChoices[3] || ''
+        } : rawChoices;
 
         return {
-            domain: item.domain || item.subject || 'General SAT',
-            difficulty: item.difficulty || 'Medium',
-            explanation: item.explanation || item.rationale || null,
+            domain: item.primary_class_cd_desc || item.skill_desc || 'General SAT',
+            difficulty: difficulty,
+            explanation: item.rationale || item.explanation || null,
             question: {
-                paragraph: item.passage || item.context || '',
-                question: item.prompt || item.question || '',
+                paragraph: item.stem || item.context || '',
+                question: item.prompt || item.body || '',
                 choices: choices,
-                correct_answer: corrAns
+                correct_answer: item.correct_answer || item.answer || 'A'
             }
         };
     }
@@ -240,23 +241,22 @@ async function fetchQuestions() {
                 })
         );
 
-        const realQuestionsReq = axios.get('https://raw.githubusercontent.com/jwei98/ai-sat-question-generator/main/data/real_questions.json')
-            .then(res => res.data)
-            .catch(err => {
-                console.error('Failed to fetch real_questions.json:', err.message);
+        const mySatPrepReq = axios.get('https://raw.githubusercontent.com/Aldhanekaa/MySATPrep/refs/heads/main/student-qb-scripts/student-qb-all-questions.json')
+            .then(res => {
+                if (res.data && Array.isArray(res.data.data)) {
+                    return res.data.data;
+                } else if (Array.isArray(res.data)) {
+                    return res.data;
+                }
                 return [];
-            });
-
-        const mySatPrepReq = axios.get('https://raw.githubusercontent.com/Aldhanekaa/MySATPrep/main/questions.json')
-            .then(res => res.data)
+            })
             .catch(err => {
                 console.error('Failed to fetch MySATPrep questions:', err.message);
                 return [];
             });
 
-        const [apiResults, realQuestionsData, mySatPrepData] = await Promise.all([
+        const [apiResults, mySatPrepData] = await Promise.all([
             Promise.all(apiRequests),
-            realQuestionsReq,
             mySatPrepReq
         ]);
 
@@ -266,17 +266,14 @@ async function fetchQuestions() {
             }
         });
 
-        const externalSources = [
-            ...(Array.isArray(realQuestionsData) ? realQuestionsData : []),
-            ...(Array.isArray(mySatPrepData) ? mySatPrepData : [])
-        ];
-
-        externalSources.forEach(item => {
-            const transformed = transformExternalQuestion(item);
-            if (transformed) {
-                allQuestions.push(transformed);
-            }
-        });
+        if (Array.isArray(mySatPrepData)) {
+            mySatPrepData.forEach(item => {
+                const transformed = transformMySatPrepQuestion(item);
+                if (transformed) {
+                    allQuestions.push(transformed);
+                }
+            });
+        }
 
         if (config.allowedDifficulties && config.allowedDifficulties.length > 0) {
             allQuestions = allQuestions.filter(q => config.allowedDifficulties.includes(q.difficulty));
